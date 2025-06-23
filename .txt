@@ -1,0 +1,7 @@
+👑 3/6: @Wellington Boots @Kswag
+4/6: @Burnz @Je Shuen Ho @Previews @Kazuto @G SwaG @W̷͌͐O̴͋͘W̷̑̽
+5/6: @7557 @Big Mannn
+6/6: @josh
+X/6: @pancake
+
+[trueskill.Rating(mu=25.001, sigma=8.333), trueskill.Rating(mu=25.001, sigma=8.333), trueskill.Rating(mu=25.001, sigma=8.333), trueskill.Rating(mu=25.001, sigma=8.333), trueskill.Rating(mu=25.001, sigma=8.333), trueskill.Rating(mu=25.001, sigma=8.333), trueskill.Rating(mu=25.965, sigma=7.944), trueskill.Rating(mu=25.965, sigma=7.944), trueskill.Rating(mu=28.718, sigma=6.929), trueskill.Rating(mu=20.317, sigma=7.078)]
