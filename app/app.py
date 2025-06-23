@@ -33,8 +33,6 @@ async def update_leaderboard(leaderboard_lines):
     cursor.execute('SELECT id, rating_mu, rating_sigma FROM users')
     players = {row[0]: model.create_rating(rating=[row[1], row[2]], name=str(row[0])) for row in cursor.fetchall()}
 
-
-
     today = datetime.date.today().isoformat()
     seen_ids = set()
     
@@ -76,7 +74,7 @@ async def update_leaderboard(leaderboard_lines):
         current_rank += 1
 
     new_ratings = model.rate(flat_players, ranks=ranks)
-    print(new_ratings)
+
     player_index = 0
     for tier in performance_tiers:
         for player in tier:
@@ -111,13 +109,14 @@ async def show_leaderboard(ctx):
     if not rows:
         await ctx.send("Leaderboard is empty.")
         return
-    
+
     rows.sort(key=lambda r: r[1] - 3*r[2], reverse=True)
-    
+
     lines = []
     for i, (uid, mu, sigma) in enumerate(rows, 1):
-        lines.append(f"{i}. <@{uid}> — {mu-3*sigma:.1f} (μ={mu:.1f}, σ={sigma:.2f})")
-    await ctx.send("Current leaderboard:\n" + "\n".join(lines))
+        score = mu - 3 * sigma
+        lines.append(f"{i}. <@{uid}> — score: {score:.1f} | μ: {mu:.1f}, σ: {sigma:.2f}")
+    await ctx.send("**Current Leaderboard**\n" + "\n".join(lines))
 
 @bot.command(name='reset-leaderboard')
 async def reset_leaderboard(ctx):
@@ -148,14 +147,27 @@ async def reset_leaderboard(ctx):
 
 @bot.event
 async def on_message(message):
-  if message.author == bot.user:
-    return
+    if message.author == bot.user:
+        return
 
-  elif message.author.id == 269715475410190346 and "results:" in message.content:
-    leaderboard_lines = message.content.split("\n")[1:]
-    await update_leaderboard(leaderboard_lines)
-    await message.reply("Updated ratings.")
+    elif message.author.id == 269715475410190346 and "results:" in message.content:
+        leaderboard_lines = message.content.split("\n")[1:]
+        await update_leaderboard(leaderboard_lines)
 
-  await bot.process_commands(message)
+        cursor.execute('SELECT id, rating_mu, rating_sigma FROM users')
+        rows = cursor.fetchall()
+        rows.sort(key=lambda r: r[1] - 3*r[2], reverse=True)
 
-bot.run(os.getenv('DISCORD_TOKEN'))
+        if not rows:
+            await message.reply("Updated ratings.\nLeaderboard is empty.")
+            return
+
+        lines = []
+        for i, (uid, mu, sigma) in enumerate(rows, 1):
+            score = mu - 3 * sigma
+            lines.append(f"{i}. <@{uid}> — score: {score:.1f} | μ: {mu:.1f}, σ: {sigma:.2f}")
+        
+        leaderboard_text = "**Updated Leaderboard**\n" + "\n".join(lines)
+        await message.reply(leaderboard_text)
+
+    await bot.process_commands(message)
