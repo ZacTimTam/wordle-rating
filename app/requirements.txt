@@ -1,3 +1,4 @@
-discord.py
+py-cord
 python-dotenv
-trueskill
+certifi
+openskill
