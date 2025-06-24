@@ -99,11 +99,15 @@ async def show_leaderboard(ctx: discord.ApplicationContext):
         return
 
     rows.sort(key=lambda r: r[1] - 3*r[2], reverse=True)
-    txt = "**Leaderboard**\n" + "\n".join(
+    txt = "\n".join(
         f"{i+1}. <@{uid}> — score: {mu - 3*sigma:.1f} | μ: {mu:.1f}, σ: {sigma:.2f}"
         for i, (uid, mu, sigma) in enumerate(rows)
     )
-    await ctx.respond(txt)
+    embed = discord.Embed(
+        title="Leaderboard",
+        description=txt
+    )
+    await ctx.respond(embed=txt)
 
 @bot.slash_command(name="reset_leaderboard", description="Reset and rebuild leaderboard from history")
 async def reset_leaderboard(ctx: discord.ApplicationContext):
