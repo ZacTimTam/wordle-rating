@@ -1,22 +1,26 @@
+# app.py
 from dotenv import load_dotenv
 import discord
-from discord.ext import commands
 import os
 import sqlite3
 from openskill.models import PlackettLuce
 import datetime
 import re
+import certifi
 
-VALID_MENTION_PATTERN = re.compile(r"<@!?\d+>")
+# Ensure SSL certificate verification works properly
+os.environ["SSL_CERT_FILE"] = certifi.where()
 
 load_dotenv()
 model = PlackettLuce()
 intents = discord.Intents.default()
 intents.message_content = True
 
+bot = discord.Bot(intents=intents)  # Slash command enabled :contentReference[oaicite:1]{index=1}
+
+# Database initialization
 conn = sqlite3.connect('users.db')
 cursor = conn.cursor()
-
 cursor.execute('''
 CREATE TABLE IF NOT EXISTS users (
   id INTEGER PRIMARY KEY,
@@ -27,147 +31,115 @@ CREATE TABLE IF NOT EXISTS users (
 ''')
 conn.commit()
 
-bot = commands.Bot(command_prefix='!', intents=intents)
+VALID_MENTION_PATTERN = re.compile(r"<@!?\d+>")
 
-async def update_leaderboard(leaderboard_lines):
+async def update_leaderboard(lines):
     cursor.execute('SELECT id, rating_mu, rating_sigma FROM users')
-    players = {row[0]: model.create_rating(rating=[row[1], row[2]], name=str(row[0])) for row in cursor.fetchall()}
-
+    players = {row[0]: model.create_rating([row[1], row[2]], name=str(row[0])) for row in cursor.fetchall()}
     today = datetime.date.today().isoformat()
-    seen_ids = set()
-    
-    performance_tiers = []
-    for line in leaderboard_lines:
-        if not line.strip():
-            continue
-            
-        mentions = [part for part in line.split() if VALID_MENTION_PATTERN.fullmatch(part)]
-        if not mentions:
-            continue
-            
+    seen = set()
+    performance = []
+
+    for line in lines:
+        parts = [p for p in line.split() if VALID_MENTION_PATTERN.fullmatch(p)]
+        if not parts: continue
         tier = []
-        for mention in mentions:
+        for mention in parts:
             uid = int(re.search(r"\d+", mention).group())
-            seen_ids.add(uid)
+            seen.add(uid)
             if uid not in players:
-                players[uid] = model.create_rating(rating=[25.0, 8.333], name=str(uid))
-
-                cursor.execute('''
-                    INSERT OR IGNORE INTO users (id, rating_mu, rating_sigma, last_played)
-                    VALUES (?, ?, ?, ?)
-                ''', (uid, players[uid].mu, players[uid].sigma, today))
+                players[uid] = model.create_rating([25.0, 8.333], name=str(uid))
+                cursor.execute(
+                    'INSERT OR IGNORE INTO users (id,rating_mu,rating_sigma,last_played) VALUES (?, ?, ?, ?)',
+                    (uid, players[uid].mu, players[uid].sigma, today)
+                )
             tier.append(players[uid])
-        
-        if tier:
-            performance_tiers.append(tier)
+        performance.append(tier)
 
-    if not performance_tiers:
+    if not performance:
         return
 
-    ranks = []
-    flat_players = []
-    current_rank = 0
-    for tier in performance_tiers:
+    flat, ranks = [], []
+    for rank, tier in enumerate(performance):
         for player in tier:
-            flat_players.append([player])
-            ranks.append(current_rank)
-        current_rank += 1
+            flat.append([player])
+            ranks.append(rank)
 
-    new_ratings = model.rate(flat_players, ranks=ranks)
-
-    player_index = 0
-    for tier in performance_tiers:
+    new_ratings = model.rate(flat, ranks=ranks)
+    for idx, tier in enumerate(performance):
         for player in tier:
             uid = int(player.name)
-            new_rating = new_ratings[player_index][0]
-            cursor.execute('''
-                UPDATE users SET
-                    rating_mu = ?, rating_sigma = ?, last_played = ?
-                WHERE id = ?
-            ''', (new_rating.mu, new_rating.sigma, today, uid))
-            player_index += 1
+            nr = new_ratings.pop(0)[0]
+            cursor.execute(
+                'UPDATE users SET rating_mu=?, rating_sigma=?, last_played=? WHERE id=?',
+                (nr.mu, nr.sigma, today, uid)
+            )
 
-    all_known_ids = set(players.keys())
-    missing_ids = all_known_ids - seen_ids
-    decay_amount = 1.0
-
-    for uid in missing_ids:
-        old_rating = players[uid]
-        new_mu = max(old_rating.mu - decay_amount, 1)
-        cursor.execute('''
-            UPDATE users SET
-                rating_mu = ?, last_played = ?
-            WHERE id = ?
-        ''', (new_mu, today, uid))
+    for uid in set(players) - seen:
+        old = players[uid]
+        new_mu = max(old.mu - 1.0, 1)
+        cursor.execute('UPDATE users SET rating_mu=?, last_played=? WHERE id=?', (new_mu, today, uid))
 
     conn.commit()
 
-@bot.command(name='show-leaderboard')
-async def show_leaderboard(ctx):
+@bot.slash_command(name="show_leaderboard", description="Display the current leaderboard")
+async def show_leaderboard(ctx: discord.ApplicationContext):
     cursor.execute('SELECT id, rating_mu, rating_sigma FROM users')
     rows = cursor.fetchall()
     if not rows:
-        await ctx.send("Leaderboard is empty.")
+        await ctx.respond("Leaderboard is empty.")
         return
-
     rows.sort(key=lambda r: r[1] - 3*r[2], reverse=True)
-
-    lines = []
-    for i, (uid, mu, sigma) in enumerate(rows, 1):
-        score = mu - 3 * sigma
-        lines.append(f"{i}. <@{uid}> — score: {score:.1f} | μ: {mu:.1f}, σ: {sigma:.2f}")
-    await ctx.send("**Current Leaderboard**\n" + "\n".join(lines))
-
-@bot.command(name='reset-leaderboard')
-async def reset_leaderboard(ctx):
-  cursor.execute('DROP TABLE IF EXISTS users')
-  cursor.execute('''
-    CREATE TABLE users (
-      id INTEGER PRIMARY KEY,
-      rating_mu REAL NOT NULL DEFAULT 25.0,
-      rating_sigma REAL NOT NULL DEFAULT 8.333,
-      last_played DATE NOT NULL
+    text = "**Leaderboard**\n" + "\n".join(
+        f"{i+1}. <@{uid}> — score: {mu - 3*sigma:.1f} | μ: {mu:.1f}, σ: {sigma:.2f}"
+        for i, (uid, mu, sigma) in enumerate(rows)
     )
-  ''')
-  conn.commit()
+    await ctx.respond(text)
 
-  await ctx.send("Resetting leaderboard and recalculating from history...")
-
-  history = []
-  async for msg in ctx.channel.history(limit=None, oldest_first=True):
-    if (msg.author.global_name == "Wordle" or msg.author.name == "Wordle") and "results:" in msg.content:
-      if re.search(r"(?<!<)@", msg.content):
-        continue
-      history.append(msg)
-
-  for msg in history:
-    leaderboard_lines = msg.content.split("\n")[1:]
-    await update_leaderboard(leaderboard_lines)
-  await ctx.send("Leaderboard recalculated from history.")
+@bot.slash_command(name="reset_leaderboard", description="Reset and rebuild leaderboard from history")
+async def reset_leaderboard(ctx: discord.ApplicationContext):
+    await ctx.defer()
+    cursor.execute('DROP TABLE IF EXISTS users')
+    cursor.execute('''
+        CREATE TABLE users (
+            id INTEGER PRIMARY KEY,
+            rating_mu REAL NOT NULL DEFAULT 25.0,
+            rating_sigma REAL NOT NULL DEFAULT 8.333,
+            last_played DATE NOT NULL
+        )
+    ''')
+    conn.commit()
+    await ctx.followup.send("Recalculating leaderboard from history...")
+    async for m in ctx.channel.history(limit=None, oldest_first=True):
+        if (m.author.global_name == "Wordle" or m.author.name == "Wordle") and "results:" in m.content:
+            if re.search(r"(?<!<)@", m.content): continue
+            await update_leaderboard(m.content.split("\n")[1:])
+    await ctx.followup.send("Leaderboard rebuilt.")
 
 @bot.event
 async def on_message(message):
     if message.author == bot.user:
         return
-
-    elif message.author.id == 269715475410190346 and "results:" in message.content:
-        leaderboard_lines = message.content.split("\n")[1:]
-        await update_leaderboard(leaderboard_lines)
-
+    if message.author.id == 269715475410190346 and "results:" in message.content:
+        await update_leaderboard(message.content.split("\n")[1:])
         cursor.execute('SELECT id, rating_mu, rating_sigma FROM users')
         rows = cursor.fetchall()
         rows.sort(key=lambda r: r[1] - 3*r[2], reverse=True)
-
-        if not rows:
-            await message.reply("Updated ratings.\nLeaderboard is empty.")
-            return
-
-        lines = []
-        for i, (uid, mu, sigma) in enumerate(rows, 1):
-            score = mu - 3 * sigma
-            lines.append(f"{i}. <@{uid}> — score: {score:.1f} | μ: {mu:.1f}, σ: {sigma:.2f}")
-        
-        leaderboard_text = "**Updated Leaderboard**\n" + "\n".join(lines)
-        await message.reply(leaderboard_text)
-
+        reply = "**Updated Leaderboard**\n" + "\n".join(
+            f"{i+1}. <@{uid}> — score: {mu - 3*sigma:.1f} | μ: {mu:.1f}, σ: {sigma:.2f}"
+            for i, (uid, mu, sigma) in enumerate(rows)
+        )
+        await message.reply(reply)
     await bot.process_commands(message)
+
+@bot.event
+async def on_ready():
+    await bot.sync_commands()  # ensure slash commands are registered :contentReference[oaicite:2]{index=2}
+    print(f"Logged in as {bot.user}")
+
+if __name__ == "__main__":
+    token = os.getenv("DISCORD_TOKEN")
+    if not token:
+        print("❌ DISCORD_TOKEN not set.")
+        exit(1)
+    bot.run(token)
